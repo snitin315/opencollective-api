@@ -105,15 +105,14 @@ const createChargeAndTransactions = async (hostStripeAccount, { order, hostStrip
   // Make sure data is available (breaking in some old tests)
   order.data = order.data || {};
 
-  let paymentIntent;
-  if (!order.data || !order.data.paymentIntent) {
-    const payload = {
+  let paymentIntent = order.data.paymentIntent;
+  if (!paymentIntent) {
+    const createPayload = {
       amount: order.totalAmount,
       currency: order.currency,
       customer: hostStripeCustomer.id,
       description: order.description,
-      confirm: true,
-      confirmation_method: 'manual',
+      confirm: false,
       metadata: {
         from: `${config.host.website}/${order.fromCollective.slug}`,
         to: `${config.host.website}/${order.collective.slug}`,
@@ -121,29 +120,35 @@ const createChargeAndTransactions = async (hostStripeAccount, { order, hostStrip
     };
     // We don't add a platform fee if the host is the root account
     if (platformFee && hostStripeAccount.username !== config.stripe.accountId) {
-      payload.application_fee_amount = platformFee;
+      createPayload.application_fee_amount = platformFee;
     }
     if (order.interval) {
-      payload.setup_future_usage = 'off_session';
+      createPayload.setup_future_usage = 'off_session';
     } else if (!order.processedAt && order.data.savePaymentMethod) {
-      payload.setup_future_usage = 'on_session';
+      createPayload.setup_future_usage = 'on_session';
     }
     // Add Payment Method ID if it's available
     const paymentMethodId = get(hostStripeCustomer, 'default_source', get(hostStripeCustomer, 'sources.data[0].id'));
     if (paymentMethodId) {
-      payload.payment_method = paymentMethodId;
+      createPayload.payment_method = paymentMethodId;
     } else {
       logger.info('paymentMethod is missing in hostStripeCustomer to pass to Payment Intent.');
       logger.info(JSON.stringify(hostStripeCustomer));
     }
-    paymentIntent = await stripe.paymentIntents.create(payload, {
-      stripeAccount: hostStripeAccount.username,
-    });
-  } else {
-    paymentIntent = await stripe.paymentIntents.confirm(order.data.paymentIntent.id, {
+    paymentIntent = await stripe.paymentIntents.create(createPayload, {
       stripeAccount: hostStripeAccount.username,
     });
   }
+
+  const confirmPayload = { confirmation_method: 'manual' };
+  if (order.interval) {
+    confirmPayload.setup_future_usage = 'off_session';
+  } else if (!order.processedAt && order.data.savePaymentMethod) {
+    confirmPayload.setup_future_usage = 'on_session';
+  }
+  paymentIntent = await stripe.paymentIntents.confirm(paymentIntent.id, confirmPayload, {
+    stripe_account: hostStripeAccount.username,
+  });
 
   if (paymentIntent.next_action) {
     order.data.paymentIntent = { id: paymentIntent.id, status: paymentIntent.status };
@@ -280,9 +285,8 @@ export default {
       });
     } catch (error) {
       if (error.message !== 'Payment Intent require action') {
-        logger.error(`Stripe Payment Error: ${error.message}`);
+        logger.error(`Stripe Payment Error: Order: ${order.id}. ${error.message}`);
         logger.error(error);
-        logger.error(error.stack);
         throw new Error(UNKNOWN_ERROR_MSG);
       }
       throw error;
