@@ -142,9 +142,10 @@ async function notifyUserId(UserId, activity, options = {}) {
   return emailLib.send(activity.type, user.email, activity.data, options);
 }
 
-export async function notifyAdminsOfCollective(CollectiveId, activity, options = {}) {
+export async function notifyAdminsOfCollective(CollectiveId, userid = null, activity, options = {}) {
   debug('notify admins of CollectiveId', CollectiveId);
   const collective = await models.Collective.findByPk(CollectiveId);
+
   if (!collective) {
     throw new Error(
       `notifyAdminsOfCollective> can't notify ${activity.type}: no collective found with id ${CollectiveId}`,
@@ -156,6 +157,11 @@ export async function notifyAdminsOfCollective(CollectiveId, activity, options =
   }
   debug('Total users to notify:', adminUsers.length);
   activity.CollectiveId = collective.id;
+
+  if (userid) {
+    const userAdmin = await models.User.findByPk(userid);
+    activity.data.member.memberCollective.email = userAdmin.email;
+  }
   return notifySubscribers(adminUsers, activity, options);
 }
 
@@ -214,7 +220,7 @@ async function notifyByEmail(activity) {
 
     case activityType.COLLECTIVE_MEMBER_CREATED:
       twitter.tweetActivity(activity);
-      notifyAdminsOfCollective(activity.data.collective.id, activity);
+      notifyAdminsOfCollective(activity.data.collective.id, activity.data.member.CreatedByUserId, activity);
       break;
 
     case activityType.COLLECTIVE_EXPENSE_CREATED:
